@@ -96,27 +96,35 @@ public class FileStorageApp {
         }
 
         /**
-         * Move/rename file from srcName to destName.
-         * If dest exists and overwrite==false -> IllegalArgumentException.
-         * If src doesn't exist -> IllegalArgumentException.
+         * Attempt to move/rename file from srcName to destinationName.
+         * @return true if move succeeded, false if src missing or dest exists and overwrite==false.
          */
-        public void moveFile(String srcName, String destinationName, boolean overWrite) {
+        public boolean moveFile(String srcName, String destinationName, boolean overWrite) {
             Objects.requireNonNull(srcName);
             Objects.requireNonNull(destinationName);
-            if (srcName.equals(destinationName)) {
-                return;
-            }
+            if (srcName.equals(destinationName)) return true;
+
             FileMetaData src = files.get(srcName);
             if (src == null) {
-                throw new IllegalArgumentException("Source file not found: " + srcName);
+                // source missing
+                return false;
             }
+
             FileMetaData dest = files.get(destinationName);
-            if (dest != null) {
-                throw new IllegalArgumentException("Destination exists");
+            if (dest != null && !overWrite) {
+                // destination exists and caller doesn't want overwrite
+                return false;
             }
+
+            // If overwriting, remove dest first.
+            if (dest != null && overWrite) {
+                files.remove(destinationName);
+            }
+
             files.remove(srcName);
             src.setName(destinationName);
             files.put(destinationName, src);
+            return true;
         }
 
         private static String prefixEndExclusive(String prefix) {
@@ -125,29 +133,31 @@ public class FileStorageApp {
 
 
         /**
-         * Return top k FileMeta objects whose names start with prefix.
+         * Return top k FileMetaData objects whose names start with prefix.
          * Deterministic ordering: size desc, name asc (tie-breaker).
          * <p>
          * If prefix is null or empty -> matches all files.
          * If k <= 0 -> returns empty list.
          */
         public List<FileMetaData> topKByPrefix(String prefix, int k) {
-            if (k <= 0) {
-                return Collections.emptyList();
-            }
-            String start = (prefix == null || prefix.isEmpty()) ? "" : null;
+            if (k <= 0) return Collections.emptyList();
+
+            // IMPORTANT: ensure start is never null (TreeMap.subMap does NOT accept null keys)
+            String start = (prefix == null || prefix.isEmpty()) ? "" : prefix;
             String end = prefixEndExclusive(start);
 
-            // Get candidate view; subMap is O(log n) to locate range.
-            Collection<FileMetaData> candidates = files.subMap(start, true, end, true).values();
+            // Optional debug (remove or comment out if noisy)
+            // System.out.printf("topKByPrefix: start='%s' end='%s' k=%d%n", start, end, k);
 
-            // Min-heap comparator: smallest size at top; for equal sizes, larger name lexicographically later
-            // We want the heap to evict the smallest size, and where sizes tie, evict the lexicographically largest name
-            PriorityQueue<FileMetaData> pq = new PriorityQueue<>(k, (a, b) -> {
-                int cmp = Long.compare(a.getSizeBytes(), b.getSizeBytes());
-                if (cmp != 0) {
-                    return cmp;
-                }
+            // Get candidate view; subMap will not throw now because start != null
+            NavigableMap<String, FileMetaData> sub = files.subMap(start, true, end, true);
+            Collection<FileMetaData> candidates = sub.values();
+
+            // PQ comparator: make the worst element according to final ordering be the root (min-heap)
+            PriorityQueue<FileMetaData> pq = new PriorityQueue<>(Math.max(1, k), (a, b) -> {
+                int cmp = Long.compare(a.getSizeBytes(), b.getSizeBytes()); // ascending size -> worst = smallest
+                if (cmp != 0) return cmp;
+                // for ties, place lexicographically larger name first (so it is evicted first)
                 return b.getName().compareTo(a.getName());
             });
 
@@ -155,22 +165,22 @@ public class FileStorageApp {
                 if (pq.size() < k) {
                     pq.offer(f);
                 } else {
-                    // if f is better than worstInTop per final ordering, replace
-                    FileMetaData worstInTop = pq.peek();
-                    if (compareForFinalOrder(f, worstInTop) < 0) {
+                    FileMetaData worst = pq.peek();
+                    // candidate is better if size greater OR (size equal AND name lexicographically smaller)
+                    if (Long.compare(f.getSizeBytes(), worst.getSizeBytes()) > 0 ||
+                            (f.getSizeBytes() == worst.getSizeBytes() && f.getName().compareTo(worst.getName()) < 0)) {
                         pq.poll();
                         pq.offer(f);
                     }
                 }
             }
-            // Extract and sort final results by size desc, name asc
+
+            // final sort: size desc, name asc
             List<FileMetaData> result = new ArrayList<>(pq);
             result.sort((a, b) -> {
-                int c = Long.compare(b.getSizeBytes(), a.getSizeBytes());
-                if (c != 0) {
-                    return c;
-                }
-                return a.getName().compareTo(b.getName());
+                int c = Long.compare(b.getSizeBytes(), a.getSizeBytes()); // desc
+                if (c != 0) return c;
+                return a.getName().compareTo(b.getName()); // asc
             });
             return result;
         }
@@ -227,15 +237,11 @@ public class FileStorageApp {
         System.out.println("Updated: " + updated);
         assert updated != null && updated.getSizeBytes() == 210_000L;
 
-        // Move file (overwrite=false) -> should fail if dest exists
+        // Move that should fail (overwrite=false)
         s.addFile("docs/2025/resume.pdf", 10L, null, false);
-        boolean moveThrew = false;
-        try {
-            s.moveFile("docs/resume.pdf", "docs/2025/resume.pdf", false);
-        } catch (IllegalArgumentException ex) {
-            moveThrew = true;
-        }
-        assert moveThrew;
+        boolean moved = s.moveFile("docs/resume.pdf", "docs/2025/resume.pdf", false);
+        assert !moved;
+
 
         // Move with overwrite=true
         s.moveFile("docs/resume.pdf", "docs/2025/resume.pdf", true);
