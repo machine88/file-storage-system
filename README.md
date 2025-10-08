@@ -1,4 +1,4 @@
-# file-storage-system
+# file-storage-system (for my job interview)
 Your task is to implement a simple cloud storage system that maps objects (files) to their metainformation. 
 Specifically, the storage should maintain files and information about them (name, size, etc.). 
 Note that this system should be in-memory: you don't need to work with the real filesystem. 
