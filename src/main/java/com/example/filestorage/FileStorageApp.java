@@ -354,45 +354,59 @@ public class FileStorageApp {
     public static void main(String[] args) {
         Storage s = new Storage();
 
-        // Add initial files (v1)
+        System.out.println("=== LEVEL 1: Add / Retrieve / Move ===");
+        // Add initial files (v1) - Level 1 behavior
         s.addFile("photos/2025/vacation.jpg", "JPEGDATA_SMALL", "sha1:aaa", false);
         s.addFile("photos/2025/party.mov", "MOVDATA_LARGE".repeat(100), "sha1:bbb", false); // large
         s.addFile("photos/2025/a_tie.jpg", "MOVDATA_LARGE".repeat(100), "sha1:ccc", false); // tie
         s.addFile("docs/resume.pdf", "PDFDATA_V1", "sha1:r1", false);
 
-        // getFile returns snapshot of latest
+        // Retrieve latest snapshot (Level 1 getFile should still work)
         FileMetaData meta = s.getFile("docs/resume.pdf");
         System.out.println("Initial resume meta: " + meta);
-        assert meta.getSizeBytes() == "PDFDATA_V1".getBytes(StandardCharsets.UTF_8).length;
+        assert Objects.requireNonNull(meta).getSizeBytes() == "PDFDATA_V1".getBytes(StandardCharsets.UTF_8).length;
+        System.out.println("LEVEL 1 checks passed.");
 
-        // Add a new version for resume (v2)
+        System.out.println("\n=== LEVEL 3: Versioning (early check) ===");
+        // Add a new version for resume (v2) — this is Level 3 behavior but assert it doesn't break L1
         s.addVersion("docs/resume.pdf", "PDFDATA_V2_WITH_MORE_CONTENT", "sha1:r2");
         List<FileVersion> versions = s.listVersions("docs/resume.pdf");
         System.out.println("Versions for resume: " + versions);
-        assert versions.size() == 2;
+        assert versions.size() == 2 : "Expected 2 versions after addVersion";
         // getFile should reflect v2
         FileMetaData meta2 = s.getFile("docs/resume.pdf");
         System.out.println("Latest resume meta: " + meta2);
         assert Objects.requireNonNull(meta2).getSizeBytes() == versions.get(1).sizeBytes;
+        System.out.println("LEVEL 3 versioning checks passed (initial).");
 
+        System.out.println("\n=== LEVEL 1: Move (preserve history) ===");
         // Move file (test boolean API)
         boolean moved = s.moveFile("docs/resume.pdf", "docs/2025/resume.pdf", false);
         System.out.println("Move succeeded? " + moved);
-        assert moved;
-        assert s.getFile("docs/resume.pdf") == null;
-        assert s.getFile("docs/2025/resume.pdf") != null;
+        assert moved : "Expected move to succeed";
+        assert s.getFile("docs/resume.pdf") == null : "Old name should be gone";
+        assert s.getFile("docs/2025/resume.pdf") != null : "New name should exist";
+        System.out.println("LEVEL 1 move checks passed (after versioning).");
 
-        // topK by prefix uses latest version sizes
+        System.out.println("\n=== LEVEL 2: top-K by prefix (uses latest sizes) ===");
+        // topK by prefix uses latest version sizes (Level 2 behavior, but ranking uses latest from Level 3)
         List<FileMetaData> top2 = s.topKByPrefix("photos/2025/", 2);
         System.out.println("Top 2 photos/2025/:");
         top2.forEach(f -> System.out.println(" - " + f.getName() + " size=" + f.getSizeBytes()));
+        assert top2.size() == 2 : "Expected 2 results for topK";
 
-        // Add version to a_tie to make it larger than party.mov and re-evaluate topK
-        s.addVersion("photos/2025/a_tie.jpg", "MOVDATA_LARGE".repeat(200), "sha1:tie2");
+        // Now change a_tie with a new larger version and confirm topK changes
+        System.out.println("\n=== LEVEL 3: Mutate version and re-check Level 2 ranking ===");
+        s.addVersion("photos/2025/a_tie.jpg", "MOVDATA_LARGE".repeat(200), "sha1:tie2"); // make it bigger
         List<FileMetaData> topAfter = s.topKByPrefix("photos/2025/", 2);
         System.out.println("Top 2 after a_tie grew:");
         topAfter.forEach(f -> System.out.println(" - " + f.getName() + " size=" + f.getSizeBytes()));
 
+        // Basic sanity: ensure a_tie is now in the top results (or at least sizes reflect latest versions)
+        boolean seenATie = topAfter.stream().anyMatch(f -> f.getName().contains("a_tie.jpg"));
+        assert seenATie : "Expected a_tie.jpg to appear in top-K after growth";
+
+        System.out.println("\nAll Level 1/2/3 demo checks passed.");
         System.out.println("Level 3 demo finished.");
     }
 
